@@ -1,0 +1,38 @@
+Given your architecture doc already locks in several choices (PostgreSQL with RLS, Redis pub/sub + job queue, Capacitor for offline-first mobile, Africa's Talking, MTN MoMo/Airtel, Claude API, EFRIS/URA), the smart move is to pick a stack that reinforces those decisions rather than fighting them — and lets you share code between the 33-screen web admin and the mobile app you'll build later.
+
+Backend — Node.js + TypeScript, NestJS
+Your doc describes 15 "module services" behind an API gateway with entitlement checks per tenant. That's almost exactly NestJS's dependency-injection/module system out of the box — each module (Core HR, Work Reports, Payroll, AI Insights, etc.) becomes a Nest module with its own controllers/services, and a guard checks tenant_modules before any route resolves. Node also lets you share TypeScript types (DTOs, Zod schemas) across backend, web, and the future Capacitor app.
+
+BullMQ on Redis for the job queue (24h work-report auto-lock, warning-threshold checks, letter generation) — direct match for "Redis Pub/Sub + Job Queue."
+Prisma or Drizzle as ORM. For RLS specifically, Drizzle gives you more control over raw SET LOCAL app.tenant_id per request; Prisma is faster to build with but needs a middleware wrapper to set the session variable per transaction. Either works — pick Prisma if velocity matters more early on.
+Passport-JWT for admin email/password auth, custom PIN+OTP flow for the accounts table (argon2 for PIN hashing, rate-limited attempts) — this maps directly to your 4.3 auth model.
+
+Web Admin — React + TypeScript
+
+Vite for build tooling.
+Tailwind CSS + shadcn/ui (Radix primitives) — matches the clean card/table aesthetic in your wireframes almost exactly, and gives you accessible primitives for the heavy data-table and form surface area (employees, attendance, payroll, compliance).
+TanStack Table for the many list/grid screens (Employees, Attendance Events, Work Reports queue, Payroll runs).
+TanStack Query for server state/caching against the Nest API.
+React Hook Form + Zod for the setup wizard, employee forms, tax rules, etc.
+dnd-kit for the Applicant Pipeline kanban.
+Recharts for dashboard KPIs (weekly hours, confirmed vs target).
+Mapbox GL JS or MapLibre for site geofence config and the Work Report location-verification map (image 13's map view).
+
+Mobile (later) — Ionic + Capacitor, same React/TS codebase
+Since your doc already commits to Capacitor for offline-first, pairing it with Ionic React gets you native-feeling UI components without leaving your web stack, and you can share business logic (API client, validation schemas, offline-queue logic) with the admin dashboard in a monorepo.
+
+@capacitor-community/sqlite for local storage of queued attendance events and work-report slots.
+Implement sync as a simple outbox pattern (append-only local queue → flush to API when online → server does conflict resolution) rather than a full bidirectional sync engine like WatermelonDB/RxDB — your doc's flows (clock-in, slot fill) are write-mostly and don't need live multi-device merge, so the simpler pattern is less to maintain.
+USSD stays server-side (Africa's Talking webhook → Nest controller), no client work needed there.
+
+Monorepo & infra
+
+Turborepo or Nx to share types/schemas/API client across apps/web, apps/mobile, apps/api.
+Postgres on RDS/Neon/Supabase (pick a region close to your users — AWS af-south-1 if available for your market).
+Redis on Upstash or Redis Cloud.
+S3-compatible storage (S3 or Cloudflare R2) for employee_documents, resumes, generated letters.
+GitHub Actions for CI/CD, Sentry for error tracking, Playwright for E2E on the admin screens.
+
+Third-party wrappers (Node SDKs/light REST clients): Africa's Talking (SMS/USSD/OTP), MTN MoMo + Airtel Money APIs, EFRIS/URA integration, @anthropic-ai/sdk for the AI Insights Engine.
+
+One thing worth deciding early: whether Prisma's RLS ergonomics are worth it for you, since your entire tenant-isolation story hinges on it. If you want, I can sketch out how the tenant_id session-variable + RLS policy pattern would actually look with Prisma in NestJS — that's usually the trickiest part to get right on day one.
